@@ -32,6 +32,10 @@ impl  Direction {
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
 
+
+#[derive(Resource, Deref, DerefMut)]
+struct DirectionTimer(Timer);
+
 #[derive(Component)]
 struct SnakeSegment{
     direction: Direction,
@@ -47,6 +51,19 @@ struct SnakeHead{
 }
 #[derive(Resource,Default, Deref, DerefMut)]
 struct LastTailPosition(Option<Position>);
+
+#[derive(Resource, Deref, DerefMut)]
+struct LastTailDirection(Option<Direction>);
+
+#[derive(Resource, Deref, DerefMut)]
+struct HeadDirection(Option<Direction>);
+
+impl Default for LastTailDirection {
+    fn default() -> Self { LastTailDirection(Some(Direction::Up)) }
+}
+impl Default for HeadDirection {
+    fn default() -> Self { HeadDirection(Some(Direction::Up)) }
+}
 
 #[derive(Component)]
 struct Food;
@@ -147,6 +164,7 @@ fn spawn_segment(
      position: Position,
      asset_server: Res<AssetServer>,
      mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+     last_tail_direction: Res<LastTailDirection>
     ) -> Entity {
     let texture_handle = asset_server.load("norm.png");
     let texture_atlas =
@@ -160,7 +178,7 @@ fn spawn_segment(
             AnimationTimer(Timer::from_seconds(0.075, TimerMode::Repeating)),
             ))
         .insert(SnakeSegment{
-            direction: Direction::Right,
+            direction: last_tail_direction.unwrap(),
         })
         .insert(position)
         .insert(Size::square(1.0))
@@ -171,6 +189,7 @@ fn spawn_snake(
     mut segments: ResMut<SnakeSegments>,
     asset_server: Res<AssetServer>,
     mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+    last_tail_direction: Res<LastTailDirection>,
     ){
     let texture_handle = asset_server.load("lead.png");
     let texture_atlas =
@@ -193,104 +212,141 @@ fn spawn_snake(
             .insert(SnakeHead {
                 direction: Direction::Up,
             })
-            .insert(SnakeSegment{
-                direction: Direction::Up,
-            })
             .insert(Position { x: 3, y: 3 })
             .insert(Size::square(1.0))
             .id(),
-        spawn_segment(commands, Position { x: 3, y: 2 },asset_server,texture_atlases),
+        spawn_segment(commands, Position { x: 3, y: 2 },asset_server,texture_atlases,last_tail_direction),
     ]);
 }
-fn snake_movement_input(keyboard_input: Res<Input<KeyCode>>, mut heads: Query<&mut SnakeHead>) {
+fn do_not_180(mut commands: Commands) {
+    commands.insert_resource(DirectionTimer(Timer::from_seconds(0.3, TimerMode::Once)));
+}
+fn snake_movement_input(
+        time: Res<Time>,
+        keyboard_input: Res<Input<KeyCode>>,
+        mut direction_timer: ResMut<DirectionTimer>,
+        mut heads: Query<&mut SnakeHead>,
+        mut head_dir: ResMut<HeadDirection>,){
+    
+    direction_timer.tick(time.delta());
     if let Some(mut head) = heads.iter_mut().next() {
-        let dir: Direction = if keyboard_input.pressed(KeyCode::Left) {
-            Direction::Left
+        if keyboard_input.pressed(KeyCode::Left) {
+            *head_dir=HeadDirection(Some(Direction::Left));
         } else if keyboard_input.pressed(KeyCode::Down) {
-            Direction::Down
+            *head_dir=HeadDirection(Some(Direction::Down));
         } else if keyboard_input.pressed(KeyCode::Up) {
-            Direction::Up
+            *head_dir=HeadDirection(Some(Direction::Up));
         } else if keyboard_input.pressed(KeyCode::Right) {
-            Direction::Right
-        } else {
-            head.direction
-        };
-        if dir != head.direction.opposite() {
-            head.direction = dir;
+            *head_dir=HeadDirection(Some(Direction::Right));
         }
+        if head_dir.0.unwrap() != head.direction.opposite() &&  direction_timer.just_finished() {
+            head.direction = head_dir.0.unwrap();
+            direction_timer.reset();
+        }
+        
         
     }
 
 }
 
 fn snake_movement(
-    mut segments: ResMut<SnakeSegments>,
+    //time: Res<Time>,
+    segments: ResMut<SnakeSegments>,
     mut heads: Query<(Entity, &SnakeHead)>,
     mut positions: Query<&mut Position>,
+    mut last_tail_direction: ResMut<LastTailDirection>,
     mut last_tail_position: ResMut<LastTailPosition>,
     mut game_over_writer: EventWriter<GameOverEvent>,
-    mut actual_segments: Query<&mut SnakeSegment>
-) {
-    if let Some((head_entity, head)) = heads.iter_mut().next() {
-        let segment_positions = segments
-            .iter()
-            .map(|e| *positions.get_mut(*e).unwrap())
-            .collect::<Vec<Position>>();
-        let mut head_pos = positions.get_mut(head_entity).unwrap();
-        match &head.direction {
-            Direction::Left => {
-                head_pos.x -= 1;
-            }
-            Direction::Right => {
-                head_pos.x += 1;
-            }
-            Direction::Up => {
-                head_pos.y += 1;
-            }
-            Direction::Down => {
-                head_pos.y -= 1;
-            }
-        };
-        
-        if head_pos.x < 0 || head_pos.y < 0 || head_pos.x as u32 >= ARENA_WIDTH || head_pos.y as u32 >= ARENA_HEIGHT{
-            game_over_writer.send(GameOverEvent);
-        }
-        if segment_positions.contains(&head_pos) {
-            game_over_writer.send(GameOverEvent);
-        }
-        let mut ok =1;
-        let mut last_direction = head.direction;
-        for (mut segment) in &mut actual_segments {
-            if ok ==1{
-                last_direction = segment.direction;
-                segment.direction = head.direction;
-                ok=0;
-            }
-            else{
-                let temp = segment.direction;
-                segment.direction = last_direction;
-                last_direction = temp;
-            }
-        }
+    mut actual_segments: Query<&mut SnakeSegment>,
+    //mut direction_timer: ResMut<DirectionTimer>
     
-        segment_positions
-            .iter()
-            .zip(segments.iter().skip(1))
-            .for_each(|(pos, segment)| {
-                *positions.get_mut(*segment).unwrap() = *pos;
-            });
-        *last_tail_position = LastTailPosition(Some(*segment_positions.last().unwrap()));
-    }
-}
+    ) {
+   
+    {
+        if let Some((head_entity, head)) = heads.iter_mut().next() {
+            let segment_positions = segments
+                .iter()
+                .map(|e| *positions.get_mut(*e).unwrap())
+                .collect::<Vec<Position>>();
+            let mut head_pos = positions.get_mut(head_entity).unwrap();
+            match &head.direction {
+                Direction::Left => {
+                    head_pos.x -= 1;
+                }
+                Direction::Right => {
+                    head_pos.x += 1;
+                }
+                Direction::Up => {
+                    head_pos.y += 1;
+                }
+                Direction::Down => {
+                    head_pos.y -= 1;
+                }
+            };
+            
+            if head_pos.x < 0 || head_pos.y < 0 || head_pos.x as u32 >= ARENA_WIDTH || head_pos.y as u32 >= ARENA_HEIGHT{
+                game_over_writer.send(GameOverEvent);
+            }
+            if segment_positions.contains(&head_pos) {
+                game_over_writer.send(GameOverEvent);
+            }
+            let mut ok =1;
+            let mut last_direction = head.direction;
+            for mut segment in &mut actual_segments {
+                if ok ==1{
+                    last_direction = segment.direction;
+                    segment.direction = head.direction;
+                    ok=0;
+                }
+                else{
+                    let temp = segment.direction;
+                    segment.direction = last_direction;
+                    last_direction = temp;
+                }
+            }
+            *last_tail_direction = LastTailDirection(Some(last_direction));
 
+            segment_positions
+                .iter()
+                .zip(segments.iter().skip(1))
+                .for_each(|(pos, segment)| {
+                    *positions.get_mut(*segment).unwrap() = *pos;
+                });
+            *last_tail_position = LastTailPosition(Some(*segment_positions.last().unwrap()));
+        }
+        }
+}
+fn get_random_position(
+     x: &mut i32,
+     y: &mut i32,
+    mut positions: Query<&mut Position>,
+){
+    let mut done =false;
+    while(done==false)
+    {
+        *x=(random::<f32>() * ARENA_WIDTH as f32) as i32;
+        *y=(random::<f32>() * ARENA_HEIGHT as f32) as i32;
+        done=true;
+        for mut pos in &mut positions{
+            if pos.x==*x && pos.y==*y {
+                done=false;
+            }
+        }
+    }
+    
+}
 fn food_spawner(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
-    mut texture_atlases: ResMut<Assets<TextureAtlas>>,){
+    mut texture_atlases: ResMut<Assets<TextureAtlas>>,
+    mut positions: Query<&mut Position>,){
     let texture_handle = asset_server.load("standin.png");
     let texture_atlas =
     TextureAtlas::from_grid(texture_handle, Vec2::new(24.0, 24.0), 3, 1, None, None);
     let texture_atlas_handle = texture_atlases.add(texture_atlas);
+    let  a: &mut i32 = &mut 0;
+    let  b: &mut i32 = &mut 0;
+    get_random_position(a,b,positions);
     commands
         .spawn((SpriteSheetBundle{
                 texture_atlas: texture_atlas_handle.clone(),
@@ -300,8 +356,8 @@ fn food_spawner(
             ))
         .insert(Food)
         .insert(Position{
-            x: (random::<f32>() * ARENA_WIDTH as f32) as i32,
-            y: (random::<f32>() * ARENA_HEIGHT as f32) as i32,
+            x: *a,
+            y: *b,
         })
         .insert(Size::square(1.0));
 }
@@ -323,13 +379,14 @@ fn snake_eating(
 fn snake_growth(
     commands: Commands,
     last_tail_position: Res<LastTailPosition>,
+    last_tail_direction: Res<LastTailDirection>,
     mut segments: ResMut<SnakeSegments>,
     mut growth_reader: EventReader<GrowthEvent>,
     asset_server: Res<AssetServer>,
     texture_atlases: ResMut<Assets<TextureAtlas>>,
 ) {
     if growth_reader.iter().next().is_some() {
-        segments.push(spawn_segment(commands, last_tail_position.0.unwrap(),asset_server,texture_atlases));
+        segments.push(spawn_segment(commands, last_tail_position.0.unwrap(),asset_server,texture_atlases,last_tail_direction));
     }
 }
 fn game_over(
@@ -365,11 +422,14 @@ fn main() {
         .insert_resource(ClearColor(Color::rgb(255.0, 255.0, 255.0)))
         .insert_resource(SnakeSegments::default())
         .insert_resource(LastTailPosition::default())
+        .insert_resource(LastTailDirection::default())
+        .insert_resource(HeadDirection::default())
         .add_plugin(LogDiagnosticsPlugin::default())
         .add_plugin(FrameTimeDiagnosticsPlugin)
         .add_startup_system(setup_camera)
         .add_startup_system(spawn_snake)
-        .add_system(snake_movement_input.before(snake_movement))
+        .add_startup_system(do_not_180)
+        .add_system(snake_movement_input.after(do_not_180))
         .add_system(animate_snake_head)
         .add_system(game_over.after(snake_movement))
         .add_system(exit.after(game_over))
@@ -383,8 +443,8 @@ fn main() {
         
         .add_system_set(
                 SystemSet::new()
-                    .with_run_criteria(FixedTimestep::step(0.2))
-                    .with_system(snake_movement)
+                    .with_run_criteria(FixedTimestep::step(0.3))
+                    .with_system(snake_movement.after(snake_movement_input))
                     .with_system(snake_eating.after(snake_movement))
                     .with_system(snake_growth.after(snake_eating))
         )
