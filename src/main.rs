@@ -29,6 +29,7 @@ impl  Direction {
         }
     }
 }
+
 #[derive(Component, Deref, DerefMut)]
 struct AnimationTimer(Timer);
 
@@ -58,9 +59,9 @@ struct LastTailDirection(Option<Direction>);
 #[derive(Resource, Deref, DerefMut)]
 struct HeadDirection(Option<Direction>);
 
-impl Default for LastTailDirection {
+/*impl Default for LastTailDirection {
     fn default() -> Self { LastTailDirection(Some(Direction::Up)) }
-}
+}*/
 impl Default for HeadDirection {
     fn default() -> Self { HeadDirection(Some(Direction::Up)) }
 }
@@ -164,11 +165,12 @@ fn spawn_segment(
      position: Position,
      asset_server: Res<AssetServer>,
      mut texture_atlases: ResMut<Assets<TextureAtlas>>,
-     last_tail_direction: Res<LastTailDirection>
+     last_tail_direction: Direction
     ) -> Entity {
     let texture_handle = asset_server.load("norm.png");
     let texture_atlas =
     TextureAtlas::from_grid(texture_handle, Vec2::new(24.0, 24.0), 4, 4, None, None);
+    //print!("{}",last_tail_direction.unwrap().display());
     let texture_atlas_handle =  texture_atlases.add(texture_atlas);
     commands
         .spawn((SpriteSheetBundle {
@@ -178,7 +180,7 @@ fn spawn_segment(
             AnimationTimer(Timer::from_seconds(0.075, TimerMode::Repeating)),
             ))
         .insert(SnakeSegment{
-            direction: last_tail_direction.unwrap(),
+            direction: last_tail_direction,
         })
         .insert(position)
         .insert(Size::square(1.0))
@@ -204,7 +206,6 @@ fn spawn_snake(
                     3 as f32 * 24.0,
                     5.0,
                 ),
-                //sprite: TextureAtlasSprite::new(0),
                     ..default()
             },
             AnimationTimer(Timer::from_seconds(0.075, TimerMode::Repeating)),
@@ -215,7 +216,7 @@ fn spawn_snake(
             .insert(Position { x: 3, y: 3 })
             .insert(Size::square(1.0))
             .id(),
-        spawn_segment(commands, Position { x: 3, y: 2 },asset_server,texture_atlases,last_tail_direction),
+        spawn_segment(commands, Position { x: 3, y: 2 },asset_server,texture_atlases,last_tail_direction.0.unwrap()),
     ]);
 }
 fn do_not_180(mut commands: Commands) {
@@ -250,7 +251,6 @@ fn snake_movement_input(
 }
 
 fn snake_movement(
-    //time: Res<Time>,
     segments: ResMut<SnakeSegments>,
     mut heads: Query<(Entity, &SnakeHead)>,
     mut positions: Query<&mut Position>,
@@ -258,7 +258,6 @@ fn snake_movement(
     mut last_tail_position: ResMut<LastTailPosition>,
     mut game_over_writer: EventWriter<GameOverEvent>,
     mut actual_segments: Query<&mut SnakeSegment>,
-    //mut direction_timer: ResMut<DirectionTimer>
     
     ) {
    
@@ -322,12 +321,12 @@ fn get_random_position(
     mut positions: Query<&mut Position>,
 ){
     let mut done =false;
-    while(done==false)
+    while done==false
     {
         *x=(random::<f32>() * ARENA_WIDTH as f32) as i32;
         *y=(random::<f32>() * ARENA_HEIGHT as f32) as i32;
         done=true;
-        for mut pos in &mut positions{
+        for  pos in &mut positions{
             if pos.x==*x && pos.y==*y {
                 done=false;
             }
@@ -339,7 +338,7 @@ fn food_spawner(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut texture_atlases: ResMut<Assets<TextureAtlas>>,
-    mut positions: Query<&mut Position>,){
+    positions: Query<&mut Position>,){
     let texture_handle = asset_server.load("standin.png");
     let texture_atlas =
     TextureAtlas::from_grid(texture_handle, Vec2::new(24.0, 24.0), 3, 1, None, None);
@@ -386,7 +385,7 @@ fn snake_growth(
     texture_atlases: ResMut<Assets<TextureAtlas>>,
 ) {
     if growth_reader.iter().next().is_some() {
-        segments.push(spawn_segment(commands, last_tail_position.0.unwrap(),asset_server,texture_atlases,last_tail_direction));
+        segments.push(spawn_segment(commands, last_tail_position.0.unwrap(),asset_server,texture_atlases,last_tail_direction.0.unwrap()));
     }
 }
 fn game_over(
@@ -415,6 +414,12 @@ fn exit(
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2dBundle::default());
 }
+fn play_music(asset_server: Res<AssetServer>, audio: Res<Audio>) {
+    audio.play_with_settings(
+        asset_server.load("deepest_pit_of_hell.ogg"),
+        PlaybackSettings::LOOP.with_volume(0.75),
+    );
+}
 fn main() {
     App::new()
         //observe that we don't give any input to the functions, bevy weirdly figures it out\
@@ -422,18 +427,18 @@ fn main() {
         .insert_resource(ClearColor(Color::rgb(255.0, 255.0, 255.0)))
         .insert_resource(SnakeSegments::default())
         .insert_resource(LastTailPosition::default())
-        .insert_resource(LastTailDirection::default())
+        .insert_resource(LastTailDirection(Some(Direction::Up)))
         .insert_resource(HeadDirection::default())
         .add_plugin(LogDiagnosticsPlugin::default())
         .add_plugin(FrameTimeDiagnosticsPlugin)
         .add_startup_system(setup_camera)
         .add_startup_system(spawn_snake)
         .add_startup_system(do_not_180)
+        //.add_startup_system(play_music)
         .add_system(snake_movement_input.after(do_not_180))
         .add_system(animate_snake_head)
         .add_system(game_over.after(snake_movement))
         .add_system(exit.after(game_over))
-
         .add_system_set_to_stage(
             CoreStage::PostUpdate,
             SystemSet::new()
@@ -460,7 +465,7 @@ fn main() {
         .add_event::<ExitEvent>()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             window: WindowDescriptor {
-                title: "Snek".to_string(),
+                title: "Cookie Rampage".to_string(),
                 width: 700.0,
                 height: 700.0,
                 ..default()
